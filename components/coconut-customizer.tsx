@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight, Save } from "lucide-react";
 import { CoconutAvatar } from "@/components/coconut-avatar";
@@ -51,14 +51,6 @@ const accessoryTopOptions = accessoryOptions.slice(0, 4);
 const accessoryBottomOptions = accessoryOptions.slice(4);
 
 type CustomizerPanel = "base" | "sunglasses" | "skirts" | "accessories" | "hair";
-
-function createAlbumId() {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return `album-${crypto.randomUUID()}`;
-  }
-
-  return `album-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
 
 function sanitizeConfig(config: CoconutConfig): CoconutConfig {
   const isValidSunglasses = Boolean(
@@ -122,26 +114,17 @@ function removeAccessoryFlag(
 
 type CoconutCustomizerProps = {
   tripId: string;
+  tripDatabaseId?: string;
   members: TripMember[];
 };
 
-function normalizeTreeStorage(value: unknown): CoconutConfig[] {
-  if (Array.isArray(value)) {
-    return value.filter(Boolean) as CoconutConfig[];
-  }
-
-  if (value && typeof value === "object") {
-    return [value as CoconutConfig];
-  }
-
-  return [];
-}
-
 export function CoconutCustomizer({
   tripId,
+  tripDatabaseId,
   members,
 }: CoconutCustomizerProps) {
   const router = useRouter();
+  const supabase = createSupabaseBrowserClient();
   const baseSwipeStartX = useRef<number | null>(null);
   const sunglassesSwipeStartX = useRef<number | null>(null);
   const skirtsSwipeStartX = useRef<number | null>(null);
@@ -165,10 +148,9 @@ export function CoconutCustomizer({
     },
   };
   const initialMember = members[0] ?? fallbackMember;
-  const [selectedMemberId, setSelectedMemberId] = useState(initialMember.id);
+  const [currentTripMemberId, setCurrentTripMemberId] = useState<string | null>(null);
   const selectedMember =
-    members.find((member) => member.id === selectedMemberId) ??
-    (selectedMemberId === "self" ? fallbackMember : initialMember);
+    members.find((member) => member.id === currentTripMemberId) ?? initialMember;
   const initialConfig = sanitizeConfig(
     selectedMember?.coconut ?? {
       baseImage: baseOptions[0],
@@ -186,8 +168,64 @@ export function CoconutCustomizer({
   const [config, setConfig] = useState<CoconutConfig>(
     initialConfig,
   );
-  const [status, setStatus] = useState("Your coconut layers stay editable as JSON.");
+  const [status, setStatus] = useState("Your coconut will be saved to the shared tree.");
   const [activePanel, setActivePanel] = useState<CustomizerPanel>("base");
+
+  useEffect(() => {
+    if (!supabase || !tripDatabaseId) {
+      return;
+    }
+
+    let cancelled = false;
+    const client = supabase;
+
+    async function loadCurrentMember() {
+      const { data: authData } = await client.auth.getUser();
+      const userId = authData.user?.id;
+
+      if (!userId) {
+        return;
+      }
+
+      const { data: tripMember } = await client
+        .from("trip_members")
+        .select("id")
+        .eq("trip_id", tripDatabaseId)
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (cancelled) {
+        return;
+      }
+
+      const nextMemberId = tripMember?.id ?? null;
+      setCurrentTripMemberId(nextMemberId);
+
+      const member = members.find((item) => item.id === nextMemberId) ?? initialMember;
+      setConfig(
+        sanitizeConfig(
+          member?.coconut ?? {
+            baseImage: baseOptions[0],
+            accessories: ["nameLabel"],
+            label: member?.nickname ?? "My Coco",
+            sunglassesImage: "",
+            skirtImage: "",
+            hairImage: "",
+            accessoryImage: "",
+            accessoryTopImage: "",
+            accessoryBottomImage: "",
+            colors: {},
+          },
+        ),
+      );
+    }
+
+    void loadCurrentMember();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase, tripDatabaseId, members, initialMember]);
 
   function cycleBase(direction: -1 | 1) {
     setConfig((current) => {
@@ -370,7 +408,8 @@ export function CoconutCustomizer({
   async function handleSave() {
     const nextConfig = {
       ...config,
-      albumId: config.albumId ?? createAlbumId(),
+      persisted: true,
+      albumId: currentTripMemberId ?? selectedMember?.id ?? "",
       label: config.label?.trim() || selectedMember?.nickname || "My Coco",
       sunglassesImage: config.sunglassesImage ?? "",
       skirtImage: config.skirtImage ?? "",
@@ -380,90 +419,49 @@ export function CoconutCustomizer({
       accessoryBottomImage: config.accessoryBottomImage ?? "",
     };
 
-    const storageKey = `cocotree:${tripId}:${selectedMemberId || "self"}`;
-    const treeKey = `cocotree:${tripId}:tree`;
-    let nextSlotIndex = 0;
-
-    try {
-      const savedTree = window.localStorage.getItem(treeKey);
-      const parsedTree = savedTree ? JSON.parse(savedTree) : [];
-      const nextTree = normalizeTreeStorage(parsedTree).slice(0, 9);
-
-      if (nextTree.length < 9) {
-        nextSlotIndex = nextTree.length;
-        nextTree.push(nextConfig);
-        window.localStorage.setItem(treeKey, JSON.stringify(nextTree));
-      } else {
-        nextSlotIndex = 8;
-      }
-    } catch {
-      window.localStorage.setItem(treeKey, JSON.stringify([nextConfig]));
-      nextSlotIndex = 0;
-    }
-
-    localStorage.setItem(storageKey, JSON.stringify(nextConfig));
-    sessionStorage.setItem(`cocotree:last-planted:${tripId}`, String(nextSlotIndex));
-
-    const supabase = createSupabaseBrowserClient();
-
-    if (!supabase || selectedMemberId === "self") {
-      setStatus("Saved locally. Your coconut is ready to appear on the tree.");
-      window.setTimeout(() => {
-        router.push(`/trip/${tripId}`);
-      }, 600);
+    if (!supabase || !currentTripMemberId) {
+      setStatus("We couldn't find your shared coco account yet. Please reopen the tree and try again.");
       return;
     }
 
     const { error } = await supabase.from("coconuts").upsert(
       {
-        trip_member_id: selectedMemberId,
+        trip_member_id: currentTripMemberId,
         base_image: nextConfig.baseImage,
         accessories: nextConfig.accessories,
         label: nextConfig.label,
         colors: nextConfig.colors ?? {},
+        metadata: {
+          albumId: currentTripMemberId,
+          sunglassesImage: nextConfig.sunglassesImage ?? "",
+          skirtImage: nextConfig.skirtImage ?? "",
+          hairImage: nextConfig.hairImage ?? "",
+          accessoryTopImage: nextConfig.accessoryTopImage ?? "",
+          accessoryBottomImage: nextConfig.accessoryBottomImage ?? "",
+        },
       },
       { onConflict: "trip_member_id" },
     );
 
     setStatus(
       error
-        ? "Saved locally, but Supabase sync failed. Check your env keys and table setup."
-        : "Saved to Supabase. Your coconut is ready for the tree.",
+        ? "We couldn't save your coconut to the shared tree yet."
+        : "Saved to the shared tree. Your coconut is ready.",
     );
+
+    if (!error) {
+      sessionStorage.setItem(`cocotree:last-planted-member:${tripId}`, currentTripMemberId);
+      window.setTimeout(() => {
+        router.push(`/trip/${tripId}`);
+      }, 450);
+    }
   }
 
   return (
     <div className="app-shell mx-auto flex w-full max-w-md flex-col gap-5 px-5 py-5">
-      {members.length > 0 ? (
-        <div className="flex items-center justify-between gap-4">
-          <label className="w-full">
-            <span className="mb-2 block text-sm font-bold text-[rgba(79,58,41,0.78)]">
-              Which friend are you editing?
-            </span>
-            <select
-              value={selectedMemberId}
-              onChange={(event) => {
-                const member = members.find((item) => item.id === event.target.value);
-                setSelectedMemberId(event.target.value);
-                if (member) {
-                  setConfig(sanitizeConfig(member.coconut));
-                }
-              }}
-              className="w-full rounded-none border border-[rgba(95,54,34,0.18)] bg-white px-4 py-3 outline-none"
-            >
-              {members.map((member) => (
-                <option key={member.id} value={member.id}>
-                  {member.nickname}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-      ) : (
-        <div className="py-1 text-center text-sm leading-6 text-[rgba(79,58,41,0.78)]">
-          Create your own coconut here, then we&apos;ll place it on the tree.
-        </div>
-      )}
+      <div className="py-1 text-center text-sm leading-6 text-[rgba(79,58,41,0.78)]">
+        This coconut will be saved to your shared CocoTree profile and appear for everyone.
+      </div>
 
       <label>
         <span className="mb-2 block text-sm font-bold text-[rgba(79,58,41,0.78)]">

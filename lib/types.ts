@@ -9,6 +9,7 @@ export type CoconutAccessory =
 
 export type CoconutConfig = {
   albumId?: string;
+  persisted?: boolean;
   baseImage: string;
   accessories: CoconutAccessory[];
   label?: string;

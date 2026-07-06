@@ -36,9 +36,10 @@ export async function getTripData(tripId: string): Promise<Trip> {
     supabase
       .from("trip_members")
       .select(
-        "id, nickname, profile_note, coconut_x, coconut_y, coconuts(base_image, accessories, label, colors)",
+        "id, nickname, profile_note, coconut_x, coconut_y, created_at, coconuts(base_image, accessories, label, colors, metadata)",
       )
-      .eq("trip_id", tripRow.id),
+      .eq("trip_id", tripRow.id)
+      .order("created_at", { ascending: true }),
     supabase
       .from("photos")
       .select(
@@ -51,6 +52,10 @@ export async function getTripData(tripId: string): Promise<Trip> {
   const members: TripMember[] =
     memberRows?.map((row) => {
       const coconutRow = Array.isArray(row.coconuts) ? row.coconuts[0] : row.coconuts;
+      const metadata =
+        coconutRow?.metadata && typeof coconutRow.metadata === "object"
+          ? (coconutRow.metadata as Record<string, unknown>)
+          : {};
 
       return {
         id: row.id,
@@ -61,9 +66,19 @@ export async function getTripData(tripId: string): Promise<Trip> {
           y: row.coconut_y ?? 40,
         },
         coconut: {
+          persisted: Boolean(coconutRow),
+          albumId: row.id,
           baseImage: coconutRow?.base_image ?? "/assets/coconut-01.png",
           accessories: coconutRow?.accessories ?? [],
           label: coconutRow?.label ?? row.nickname,
+          sunglassesImage:
+            typeof metadata.sunglassesImage === "string" ? metadata.sunglassesImage : "",
+          skirtImage: typeof metadata.skirtImage === "string" ? metadata.skirtImage : "",
+          hairImage: typeof metadata.hairImage === "string" ? metadata.hairImage : "",
+          accessoryTopImage:
+            typeof metadata.accessoryTopImage === "string" ? metadata.accessoryTopImage : "",
+          accessoryBottomImage:
+            typeof metadata.accessoryBottomImage === "string" ? metadata.accessoryBottomImage : "",
           colors: coconutRow?.colors ?? {},
         },
       };

@@ -38,6 +38,11 @@ export default function AlbumPageClient({
   const [currentTripMemberId, setCurrentTripMemberId] = useState<string | null>(null);
 
   useEffect(() => {
+    if (trip.databaseId) {
+      setPhotos(trip.photos);
+      return;
+    }
+
     try {
       const saved = window.localStorage.getItem(`cocotree:${trip.id}:local-photos`);
       const parsed = saved ? JSON.parse(saved) : [];
@@ -46,7 +51,7 @@ export default function AlbumPageClient({
     } catch {
       setPhotos(trip.photos);
     }
-  }, [trip.id, trip.photos]);
+  }, [trip.id, trip.photos, trip.databaseId]);
 
   useEffect(() => {
     if (trip.members.some((item) => item.id === memberId)) {
@@ -144,9 +149,45 @@ export default function AlbumPageClient({
     };
   }, [trip.databaseId]);
 
+  async function deleteServerPhotos(photoIds: string[]) {
+    const supabase = createSupabaseBrowserClient();
+
+    if (!supabase || !trip.databaseId || !member || photoIds.length === 0) {
+      return false;
+    }
+
+    const { data: rows } = await supabase
+      .from("album_photos")
+      .select("id, storage_path")
+      .eq("trip_id", trip.databaseId)
+      .eq("album_id", member.id)
+      .in("id", photoIds);
+
+    const storagePaths = (rows ?? [])
+      .map((row) => row.storage_path)
+      .filter((path): path is string => Boolean(path));
+
+    if (storagePaths.length > 0) {
+      await supabase.storage.from("trip-photos").remove(storagePaths);
+    }
+
+    const { error } = await supabase
+      .from("album_photos")
+      .delete()
+      .eq("trip_id", trip.databaseId)
+      .eq("album_id", member.id)
+      .in("id", photoIds);
+
+    return !error;
+  }
+
   function handleAddMockPhotos(newPhotos: AlbumPhoto[]) {
     setPhotos((current) => {
       const next = dedupePhotosById([...newPhotos, ...current]);
+
+      if (trip.databaseId) {
+        return next;
+      }
 
       try {
         const saved = window.localStorage.getItem(`cocotree:${trip.id}:local-photos`);
@@ -188,7 +229,19 @@ export default function AlbumPageClient({
     );
   }
 
-  function handleDeletePhoto(photoId: string) {
+  async function handleDeletePhoto(photoId: string) {
+    if (trip.databaseId) {
+      const deleted = await deleteServerPhotos([photoId]);
+
+      if (!deleted) {
+        return;
+      }
+
+      setPhotos((current) => current.filter((photo) => photo.id !== photoId));
+      setSelectedIds((current) => current.filter((id) => id !== photoId));
+      return;
+    }
+
     setPhotos((current) => current.filter((photo) => photo.id !== photoId));
     setSelectedIds((current) => current.filter((id) => id !== photoId));
 
@@ -205,8 +258,20 @@ export default function AlbumPageClient({
     }
   }
 
-  function handleDeleteSelectedPhotos(photoIds: string[]) {
+  async function handleDeleteSelectedPhotos(photoIds: string[]) {
     const photoIdSet = new Set(photoIds);
+
+    if (trip.databaseId) {
+      const deleted = await deleteServerPhotos(photoIds);
+
+      if (!deleted) {
+        return;
+      }
+
+      setPhotos((current) => current.filter((photo) => !photoIdSet.has(photo.id)));
+      setSelectedIds([]);
+      return;
+    }
 
     setPhotos((current) => current.filter((photo) => !photoIdSet.has(photo.id)));
     setSelectedIds([]);
@@ -228,10 +293,6 @@ export default function AlbumPageClient({
     const supabase = createSupabaseBrowserClient();
 
     if (!supabase || !trip.databaseId || !currentTripMemberId || !member) {
-      return;
-    }
-
-    if (trip.members.some((item) => item.id === member.id)) {
       return;
     }
 

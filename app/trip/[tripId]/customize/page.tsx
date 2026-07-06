@@ -24,7 +24,7 @@ export default async function CustomizePage({
             Back to tree
           </Link>
         </div>
-        <CoconutCustomizer tripId={trip.id} members={trip.members} />
+        <CoconutCustomizer tripId={trip.id} tripDatabaseId={trip.databaseId} members={trip.members} />
       </main>
     </TripAccessGate>
   );

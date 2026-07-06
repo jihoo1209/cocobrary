@@ -1,19 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Plus, Trash2 } from "lucide-react";
 import { CoconutAvatar } from "@/components/coconut-avatar";
-import { migrateTreeToAlbumIds } from "@/lib/custom-album-migration";
-import { CoconutConfig, Trip } from "@/lib/types";
+import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
+import { Trip, TripMember } from "@/lib/types";
 
-type CoconutTreeStageProps = {
-  trip: Trip;
-};
-
-const SELF_COCONUT_KEY_PREFIX = "cocotree:";
 const TREE_SLOT_POSITIONS = [
   { left: "28%", top: "18%" },
   { left: "62%", top: "24%" },
@@ -26,340 +20,361 @@ const TREE_SLOT_POSITIONS = [
   { left: "45%", top: "calc(84% - 190px)" },
 ] as const;
 
-function normalizeTreeStorage(value: unknown): CoconutConfig[] {
-  if (Array.isArray(value)) {
-    return value.filter(Boolean) as CoconutConfig[];
-  }
+type CoconutTreeStageProps = {
+  trip: Trip;
+};
 
-  if (value && typeof value === "object") {
-    return [value as CoconutConfig];
-  }
-
-  return [];
-}
-
-function getAlbumMemberId(coconut: CoconutConfig, index: number) {
-  return coconut.albumId ?? `custom-${index + 1}`;
-}
-
-function removeAlbumStorageForMember(tripId: string, memberId: string) {
-  try {
-    const savedPhotos = window.localStorage.getItem(`cocotree:${tripId}:local-photos`);
-    const parsedPhotos = savedPhotos ? JSON.parse(savedPhotos) : [];
-
-    if (Array.isArray(parsedPhotos)) {
-      const filteredPhotos = parsedPhotos.filter(
-        (photo) =>
-          !Array.isArray(photo?.targets) ||
-          !photo.targets.some((target: { memberId?: string }) => target.memberId === memberId),
-      );
-
-      window.localStorage.setItem(
-        `cocotree:${tripId}:local-photos`,
-        JSON.stringify(filteredPhotos),
-      );
-    }
-  } catch {
-    // Keep the main delete flow even if photo cleanup fails.
-  }
-
-  window.localStorage.removeItem(`cocotree:${tripId}:album-chat:${memberId}`);
-  window.localStorage.removeItem(`cocotree:${tripId}:${memberId}:photo-likes`);
-  window.localStorage.removeItem(`cocotree:${tripId}:${memberId}:photo-comments`);
-}
-
-function reindexAlbumStorageAfterDelete(tripId: string, deletedIndex: number, totalCount: number) {
-  const deletedMemberId = `custom-${deletedIndex + 1}`;
-
-  try {
-    const savedPhotos = window.localStorage.getItem(`cocotree:${tripId}:local-photos`);
-    const parsedPhotos = savedPhotos ? JSON.parse(savedPhotos) : [];
-
-    if (Array.isArray(parsedPhotos)) {
-      const reindexedPhotos = parsedPhotos
-        .filter((photo) =>
-          Array.isArray(photo?.targets) &&
-          !photo.targets.some((target: { memberId?: string }) => target.memberId === deletedMemberId),
-        )
-        .map((photo) => {
-          if (!Array.isArray(photo?.targets)) {
-            return photo;
-          }
-
-          return {
-            ...photo,
-            targets: photo.targets.map((target: { memberId?: string }) => {
-              const currentMemberId = target.memberId ?? "";
-
-              if (!currentMemberId.startsWith("custom-")) {
-                return target;
-              }
-
-              const slotNumber = Number.parseInt(currentMemberId.replace("custom-", ""), 10);
-
-              if (!Number.isFinite(slotNumber) || slotNumber <= deletedIndex + 1) {
-                return target;
-              }
-
-              return {
-                ...target,
-                memberId: `custom-${slotNumber - 1}`,
-              };
-            }),
-          };
-        });
-
-      window.localStorage.setItem(
-        `cocotree:${tripId}:local-photos`,
-        JSON.stringify(reindexedPhotos),
-      );
-    }
-  } catch {
-    // If local photo data is malformed, skip reindexing and keep tree delete working.
-  }
-
-  window.localStorage.removeItem(`cocotree:${tripId}:album-chat:${deletedMemberId}`);
-  window.localStorage.removeItem(`cocotree:${tripId}:${deletedMemberId}:photo-likes`);
-  window.localStorage.removeItem(`cocotree:${tripId}:${deletedMemberId}:photo-comments`);
-
-  for (let slotNumber = deletedIndex + 2; slotNumber <= totalCount; slotNumber += 1) {
-    const currentMemberId = `custom-${slotNumber}`;
-    const nextMemberId = `custom-${slotNumber - 1}`;
-
-    const chatValue = window.localStorage.getItem(`cocotree:${tripId}:album-chat:${currentMemberId}`);
-    if (chatValue !== null) {
-      window.localStorage.setItem(`cocotree:${tripId}:album-chat:${nextMemberId}`, chatValue);
-      window.localStorage.removeItem(`cocotree:${tripId}:album-chat:${currentMemberId}`);
-    }
-
-    const likesValue = window.localStorage.getItem(`cocotree:${tripId}:${currentMemberId}:photo-likes`);
-    if (likesValue !== null) {
-      window.localStorage.setItem(`cocotree:${tripId}:${nextMemberId}:photo-likes`, likesValue);
-      window.localStorage.removeItem(`cocotree:${tripId}:${currentMemberId}:photo-likes`);
-    }
-
-    const commentsValue = window.localStorage.getItem(`cocotree:${tripId}:${currentMemberId}:photo-comments`);
-    if (commentsValue !== null) {
-      window.localStorage.setItem(`cocotree:${tripId}:${nextMemberId}:photo-comments`, commentsValue);
-      window.localStorage.removeItem(`cocotree:${tripId}:${currentMemberId}:photo-comments`);
-    }
-  }
+function getBadgeIndex(members: TripMember[], memberId: string) {
+  return members.findIndex((member) => member.id === memberId);
 }
 
 export function CoconutTreeStage({ trip }: CoconutTreeStageProps) {
   const router = useRouter();
-  const [customCoconuts, setCustomCoconuts] = useState<CoconutConfig[]>([]);
+  const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+  const longPressTimeoutRef = useRef<number | null>(null);
+  const tapTimeoutRef = useRef<number | null>(null);
+  const lastTapRef = useRef<{ memberId: string | null; time: number }>({
+    memberId: null,
+    time: 0,
+  });
+  const [currentTripMemberId, setCurrentTripMemberId] = useState<string | null>(null);
   const [justPlantedIndex, setJustPlantedIndex] = useState<number | null>(null);
-  const [deleteModeIndex, setDeleteModeIndex] = useState<number | null>(null);
-  const [confirmDeleteIndex, setConfirmDeleteIndex] = useState<number | null>(null);
-  const longPressTimerRef = useRef<number | null>(null);
-  const suppressNextTapRef = useRef(false);
-  const lastTapRef = useRef<{ index: number; time: number } | null>(null);
+  const [deleteModeMemberId, setDeleteModeMemberId] = useState<string | null>(null);
+  const [confirmDeleteMemberId, setConfirmDeleteMemberId] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
-  function clearLongPressTimer() {
-    if (longPressTimerRef.current !== null) {
-      window.clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = null;
-    }
-  }
+  const visibleMembers = useMemo(
+    () => trip.members.filter((member) => member.coconut.persisted).slice(0, 9),
+    [trip.members],
+  );
 
   useEffect(() => {
-    const treeKey = `${SELF_COCONUT_KEY_PREFIX}${trip.id}:tree`;
-    const savedTree = window.localStorage.getItem(treeKey);
-    const plantedKey = `cocotree:last-planted:${trip.id}`;
-    const savedPlantedIndex = window.sessionStorage.getItem(plantedKey);
+    if (!supabase || !trip.databaseId) {
+      setCurrentTripMemberId(null);
+      return;
+    }
+
+    let cancelled = false;
+    const client = supabase;
+
+    async function loadCurrentTripMember() {
+      const { data: authData } = await client.auth.getUser();
+      const userId = authData.user?.id;
+
+      if (!userId) {
+        if (!cancelled) {
+          setCurrentTripMemberId(null);
+        }
+        return;
+      }
+
+      const { data: tripMember } = await client
+        .from("trip_members")
+        .select("id")
+        .eq("trip_id", trip.databaseId)
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (!cancelled) {
+        setCurrentTripMemberId(tripMember?.id ?? null);
+      }
+    }
+
+    void loadCurrentTripMember();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase, trip.databaseId]);
+
+  useEffect(() => {
+    const plantedMemberId = sessionStorage.getItem(
+      `cocotree:last-planted-member:${trip.id}`,
+    );
+
+    if (!plantedMemberId) {
+      setJustPlantedIndex(null);
+      return;
+    }
+
+    const nextIndex = getBadgeIndex(visibleMembers, plantedMemberId);
+
+    if (nextIndex >= 0) {
+      setJustPlantedIndex(nextIndex);
+      const timeout = window.setTimeout(() => setJustPlantedIndex(null), 1800);
+      sessionStorage.removeItem(`cocotree:last-planted-member:${trip.id}`);
+
+      return () => {
+        window.clearTimeout(timeout);
+      };
+    }
+
+    sessionStorage.removeItem(`cocotree:last-planted-member:${trip.id}`);
+    setJustPlantedIndex(null);
+  }, [trip.id, visibleMembers]);
+
+  useEffect(() => {
+    function handleOutsidePointerDown() {
+      setDeleteModeMemberId(null);
+    }
+
+    if (!deleteModeMemberId || confirmDeleteMemberId) {
+      return;
+    }
+
+    window.addEventListener("pointerdown", handleOutsidePointerDown);
+
+    return () => {
+      window.removeEventListener("pointerdown", handleOutsidePointerDown);
+    };
+  }, [deleteModeMemberId, confirmDeleteMemberId]);
+
+  useEffect(() => {
+    return () => {
+      if (longPressTimeoutRef.current !== null) {
+        window.clearTimeout(longPressTimeoutRef.current);
+      }
+      if (tapTimeoutRef.current !== null) {
+        window.clearTimeout(tapTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  function beginLongPress(memberId: string) {
+    if (longPressTimeoutRef.current !== null) {
+      window.clearTimeout(longPressTimeoutRef.current);
+    }
+
+    longPressTimeoutRef.current = window.setTimeout(() => {
+      setDeleteModeMemberId(memberId);
+      longPressTimeoutRef.current = null;
+    }, 460);
+  }
+
+  function cancelLongPress() {
+    if (longPressTimeoutRef.current !== null) {
+      window.clearTimeout(longPressTimeoutRef.current);
+      longPressTimeoutRef.current = null;
+    }
+  }
+
+  function openAlbum(memberId: string) {
+    router.push(`/trip/${trip.id}/album/${memberId}`);
+  }
+
+  function handleDesktopClick(memberId: string) {
+    if (deleteModeMemberId === memberId) {
+      return;
+    }
+
+    openAlbum(memberId);
+  }
+
+  function handleTouchEnd(memberId: string) {
+    cancelLongPress();
+
+    if (deleteModeMemberId === memberId) {
+      return;
+    }
+
+    const now = Date.now();
+    const wasDoubleTap =
+      lastTapRef.current.memberId === memberId && now - lastTapRef.current.time < 280;
+
+    if (tapTimeoutRef.current !== null) {
+      window.clearTimeout(tapTimeoutRef.current);
+      tapTimeoutRef.current = null;
+    }
+
+    if (wasDoubleTap) {
+      setDeleteModeMemberId(memberId);
+      lastTapRef.current = { memberId: null, time: 0 };
+      return;
+    }
+
+    lastTapRef.current = { memberId, time: now };
+    tapTimeoutRef.current = window.setTimeout(() => {
+      openAlbum(memberId);
+      tapTimeoutRef.current = null;
+    }, 260);
+  }
+
+  async function handleDeleteMember(member: TripMember) {
+    if (!supabase || !trip.databaseId) {
+      return;
+    }
+
+    setIsDeleting(true);
+    setDeleteModeMemberId(null);
 
     try {
-      const parsedTree = savedTree ? JSON.parse(savedTree) : [];
-      const normalizedTree = normalizeTreeStorage(parsedTree);
-      const baseTree = normalizedTree.slice(0, 9);
-      const { migratedTree, changed } = migrateTreeToAlbumIds(trip.id, baseTree);
-      const nextTree = migratedTree.slice(0, 9);
+      const { data: photoRows } = await supabase
+        .from("album_photos")
+        .select("storage_path")
+        .eq("trip_id", trip.databaseId)
+        .eq("album_id", member.id);
 
-      if (changed) {
-        window.localStorage.setItem(treeKey, JSON.stringify(nextTree));
+      const storagePaths = (photoRows ?? [])
+        .map((row) => row.storage_path)
+        .filter((path): path is string => Boolean(path));
+
+      if (storagePaths.length > 0) {
+        await supabase.storage.from("trip-photos").remove(storagePaths);
       }
 
-      setCustomCoconuts(nextTree);
-      const nextJustPlantedIndex =
-        savedPlantedIndex !== null ? Number.parseInt(savedPlantedIndex, 10) : null;
-      setJustPlantedIndex(Number.isFinite(nextJustPlantedIndex) ? nextJustPlantedIndex : null);
+      await supabase.rpc("delete_own_album", {
+        target_trip_id: trip.databaseId,
+        target_album_member_id: member.id,
+      });
 
-      if (savedPlantedIndex !== null) {
-        window.sessionStorage.removeItem(plantedKey);
-        window.setTimeout(() => {
-          setJustPlantedIndex(null);
-        }, 1400);
-      }
-    } catch {
-      setCustomCoconuts([]);
-      setJustPlantedIndex(null);
+      sessionStorage.removeItem(`cocotree:last-planted-member:${trip.id}`);
+      router.refresh();
+    } finally {
+      setConfirmDeleteMemberId(null);
+      setIsDeleting(false);
     }
-  }, [trip.id]);
-
-  function persistTree(nextTree: CoconutConfig[]) {
-    const treeKey = `${SELF_COCONUT_KEY_PREFIX}${trip.id}:tree`;
-    window.localStorage.setItem(treeKey, JSON.stringify(nextTree));
-    setCustomCoconuts(nextTree);
-  }
-
-  function handleDeleteCoconut(index: number) {
-    const deletedCoconut = customCoconuts[index];
-
-    if (deletedCoconut?.albumId) {
-      removeAlbumStorageForMember(trip.id, deletedCoconut.albumId);
-    } else {
-      reindexAlbumStorageAfterDelete(trip.id, index, customCoconuts.length);
-    }
-
-    const nextTree = customCoconuts.filter((_, itemIndex) => itemIndex !== index);
-    persistTree(nextTree);
-    window.localStorage.removeItem(`${SELF_COCONUT_KEY_PREFIX}${trip.id}:self`);
-    setDeleteModeIndex(null);
-    setConfirmDeleteIndex(null);
-  }
-
-  function triggerDeleteMode(index: number) {
-    clearLongPressTimer();
-    setDeleteModeIndex(index);
-    suppressNextTapRef.current = true;
-  }
-
-  function handlePointerDown(index: number) {
-    clearLongPressTimer();
-    longPressTimerRef.current = window.setTimeout(() => {
-      triggerDeleteMode(index);
-    }, 520);
-  }
-
-  function handlePointerUp(index: number) {
-    const now = Date.now();
-    const lastTap = lastTapRef.current;
-
-    if (lastTap && lastTap.index === index && now - lastTap.time < 280) {
-      triggerDeleteMode(index);
-      lastTapRef.current = null;
-      return;
-    }
-
-    lastTapRef.current = { index, time: now };
-    clearLongPressTimer();
-  }
-
-  function openAlbum(index: number) {
-    if (suppressNextTapRef.current) {
-      suppressNextTapRef.current = false;
-      return;
-    }
-
-    setDeleteModeIndex(null);
-    setConfirmDeleteIndex(null);
-    router.push(`/trip/${trip.id}/album/${getAlbumMemberId(customCoconuts[index], index)}`);
   }
 
   return (
-    <section
-      className="relative h-[100svh] w-full overflow-hidden bg-[#8fc6ff]"
-      onClick={() => {
-        setDeleteModeIndex(null);
-        setConfirmDeleteIndex(null);
-      }}
-    >
+    <section className="relative h-[100svh] w-full overflow-hidden bg-[#bfe7f8]">
       <Image
         src="/assets/coconut-tree.png"
-        alt="CocoTree main tree"
+        alt={`${trip.name} coconut tree`}
         fill
         priority
         className="object-cover"
         style={{ objectPosition: "50% 48%" }}
-        sizes="100vw"
       />
 
-      {customCoconuts.map((coconut, index) => {
-        const slot = TREE_SLOT_POSITIONS[index];
+      {visibleMembers.map((member, index) => {
+        const position = TREE_SLOT_POSITIONS[index];
+        const isCurrentUsersCoconut = currentTripMemberId === member.id;
+        const isDeleteMode = deleteModeMemberId === member.id;
+        const shouldAnimate = justPlantedIndex === index;
 
         return (
           <div
-            key={`${coconut.label ?? "coco"}-${index}`}
-            className="absolute z-10 -translate-x-1/2 -translate-y-1/2"
-            style={{ left: slot.left, top: slot.top }}
-            onClick={(event) => event.stopPropagation()}
+            key={member.id}
+            className={`absolute z-20 -translate-x-1/2 -translate-y-1/2 ${shouldAnimate ? "animate-coconut-pop" : ""}`}
+            style={position}
           >
-            {deleteModeIndex === index ? (
-              <button
-                type="button"
-                onClick={() => setConfirmDeleteIndex(index)}
-                className="absolute -right-2 -top-8 z-20 inline-flex h-9 w-9 items-center justify-center rounded-full bg-[rgba(255,87,87,0.94)] text-white shadow-[0_10px_22px_rgba(77,29,29,0.22)]"
-                aria-label={`Delete ${coconut.label ?? `coconut ${index + 1}`}`}
-              >
-                <Trash2 size={16} />
-              </button>
-            ) : null}
+            <div className="pointer-events-none absolute left-1/2 top-[-22px] h-5 w-px -translate-x-1/2 bg-[rgba(78,55,33,0.22)]" />
+            <div className="pointer-events-none absolute left-1/2 top-[-26px] h-2.5 w-2.5 -translate-x-1/2 rounded-full border border-[rgba(78,55,33,0.26)] bg-[rgba(255,255,255,0.72)]" />
 
             <button
               type="button"
-              onPointerDown={() => handlePointerDown(index)}
-              onPointerUp={() => handlePointerUp(index)}
-              onPointerLeave={clearLongPressTimer}
-              onPointerCancel={clearLongPressTimer}
-              onClick={() => openAlbum(index)}
-              className={justPlantedIndex === index ? "animate-coconut-pop" : ""}
-              aria-label={`Open album for ${coconut.label ?? `coconut ${index + 1}`}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                handleDesktopClick(member.id);
+              }}
+              onDoubleClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (isCurrentUsersCoconut) {
+                  setDeleteModeMemberId(member.id);
+                }
+              }}
+              onMouseDown={() => {
+                if (isCurrentUsersCoconut) {
+                  beginLongPress(member.id);
+                }
+              }}
+              onMouseUp={cancelLongPress}
+              onMouseLeave={cancelLongPress}
+              onTouchStart={() => {
+                if (isCurrentUsersCoconut) {
+                  beginLongPress(member.id);
+                }
+              }}
+              onTouchEnd={(event) => {
+                event.stopPropagation();
+                handleTouchEnd(member.id);
+              }}
+              onTouchCancel={cancelLongPress}
+              className="relative block"
+              aria-label={`${member.nickname} album`}
             >
-              <div className="absolute left-1/2 top-[-34px] h-10 w-[2px] -translate-x-1/2 rounded-full bg-[rgba(98,64,42,0.45)]" />
-              <div className="absolute left-1/2 top-[-6px] h-4 w-4 -translate-x-1/2 rounded-full border border-[rgba(98,64,42,0.18)] bg-[rgba(255,250,243,0.92)] shadow-sm" />
-              <div>
-                <CoconutAvatar
-                  config={coconut}
-                  size={102}
-                  priority={index === 0}
-                  className="animate-floaty"
-                />
-              </div>
+              <CoconutAvatar
+                config={member.coconut}
+                size={150}
+              />
             </button>
+
+            {isDeleteMode && isCurrentUsersCoconut ? (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setConfirmDeleteMemberId(member.id);
+                }}
+                className="absolute right-[-10px] top-[-12px] z-30 flex h-9 w-9 items-center justify-center rounded-full bg-[#d75d5d] text-white shadow-[0_12px_25px_rgba(120,42,42,0.32)]"
+                aria-label={`Delete ${member.nickname}`}
+              >
+                <Trash2 size={17} />
+              </button>
+            ) : null}
           </div>
         );
       })}
 
-      {confirmDeleteIndex !== null ? (
+      {confirmDeleteMemberId !== null ? (
         <div
           className="absolute inset-0 z-30 flex items-center justify-center bg-[rgba(42,27,19,0.22)] px-6 backdrop-blur-[2px]"
-          onClick={(event) => event.stopPropagation()}
+          onClick={() => {
+            if (!isDeleting) {
+              setConfirmDeleteMemberId(null);
+            }
+          }}
         >
-          <div className="w-full max-w-xs rounded-[28px] bg-[rgba(255,250,243,0.96)] px-5 py-5 text-center shadow-[0_18px_40px_rgba(62,41,28,0.18)]">
+          <div
+            className="w-full max-w-xs rounded-[28px] bg-[rgba(255,250,243,0.96)] px-5 py-5 text-center shadow-[0_18px_40px_rgba(62,41,28,0.18)]"
+            onClick={(event) => event.stopPropagation()}
+          >
             <p className="text-base font-bold text-[var(--cocoa-deep)]">
               Delete this coconut?
             </p>
             <p className="mt-2 text-sm leading-6 text-[rgba(79,58,41,0.72)]">
-              Its album, photos, likes, comments, and chat will also be deleted from this site.
+              Its album, photos, likes, comments, and chat will also be deleted from
+              this site.
             </p>
-            <div className="mt-4 flex items-center justify-center gap-3">
+            <div className="mt-5 flex items-center justify-center gap-3">
               <button
                 type="button"
-                onClick={() => setConfirmDeleteIndex(null)}
-                className="rounded-full bg-white px-4 py-2 text-sm font-bold text-[var(--cocoa-deep)]"
+                onClick={() => setConfirmDeleteMemberId(null)}
+                disabled={isDeleting}
+                className="rounded-full bg-[rgba(255,255,255,0.84)] px-4 py-2 text-sm font-bold text-[var(--cocoa-deep)] disabled:opacity-50"
               >
-                Cancel
+                Keep it
               </button>
               <button
                 type="button"
-                onClick={() => handleDeleteCoconut(confirmDeleteIndex)}
-                className="rounded-full bg-[rgba(255,87,87,0.94)] px-4 py-2 text-sm font-bold text-white"
+                onClick={() => {
+                  const member = visibleMembers.find(
+                    (item) => item.id === confirmDeleteMemberId,
+                  );
+
+                  if (member) {
+                    void handleDeleteMember(member);
+                  }
+                }}
+                disabled={isDeleting}
+                className="rounded-full bg-[#d75d5d] px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
               >
-                Delete
+                {isDeleting ? "Deleting..." : "Delete"}
               </button>
             </div>
           </div>
         </div>
       ) : null}
 
-      <Link
-        href={`/trip/${trip.id}/customize`}
+      <button
+        type="button"
+        onClick={() => router.push(`/trip/${trip.id}/customize`)}
         aria-label="Add my coconut"
         className="absolute bottom-8 right-6 z-20 flex h-14 w-14 items-center justify-center rounded-full bg-white/75 text-[var(--cocoa-deep)] transition hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
       >
         <Plus size={30} strokeWidth={2} color="currentColor" />
-      </Link>
+      </button>
     </section>
   );
 }

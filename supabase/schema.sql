@@ -214,6 +214,38 @@ $$;
 grant execute on function public.resolve_trip_id_by_slug(text) to authenticated;
 grant execute on function public.join_trip_by_slug(text, text) to authenticated;
 
+create or replace function public.delete_own_album(target_trip_id uuid, target_album_member_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not exists (
+    select 1
+    from public.trip_members tm
+    where tm.id = target_album_member_id
+      and tm.trip_id = target_trip_id
+      and tm.user_id = auth.uid()
+  ) then
+    raise exception 'Not allowed';
+  end if;
+
+  delete from public.album_chats
+  where trip_id = target_trip_id
+    and album_id = target_album_member_id::text;
+
+  delete from public.album_photos
+  where trip_id = target_trip_id
+    and album_id = target_album_member_id::text;
+
+  delete from public.coconuts
+  where trip_member_id = target_album_member_id;
+end;
+$$;
+
+grant execute on function public.delete_own_album(uuid, uuid) to authenticated;
+
 alter table public.trips enable row level security;
 alter table public.trip_members enable row level security;
 alter table public.coconuts enable row level security;
@@ -673,3 +705,14 @@ on storage.objects
 for delete
 to authenticated
 using (bucket_id = 'trip-photos' and owner = auth.uid());
+
+drop policy if exists "album owners can delete album photo objects" on storage.objects;
+create policy "album owners can delete album photo objects"
+on storage.objects
+for delete
+to authenticated
+using (
+  bucket_id = 'trip-photos'
+  and public.is_trip_member((storage.foldername(name))[1]::uuid)
+  and public.is_trip_member_record((storage.foldername(name))[2]::uuid)
+);
