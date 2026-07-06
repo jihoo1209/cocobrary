@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight, Save } from "lucide-react";
 import { CoconutAvatar } from "@/components/coconut-avatar";
@@ -124,12 +124,13 @@ export function CoconutCustomizer({
   members,
 }: CoconutCustomizerProps) {
   const router = useRouter();
-  const supabase = createSupabaseBrowserClient();
+  const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const baseSwipeStartX = useRef<number | null>(null);
   const sunglassesSwipeStartX = useRef<number | null>(null);
   const skirtsSwipeStartX = useRef<number | null>(null);
   const hairSwipeStartX = useRef<number | null>(null);
   const accessoriesSwipeStartX = useRef<number | null>(null);
+  const hydratedMemberIdRef = useRef<string | null>(null);
   const fallbackMember: TripMember = {
     id: "self",
     nickname: "My Coco",
@@ -200,24 +201,6 @@ export function CoconutCustomizer({
 
       const nextMemberId = tripMember?.id ?? null;
       setCurrentTripMemberId(nextMemberId);
-
-      const member = members.find((item) => item.id === nextMemberId) ?? initialMember;
-      setConfig(
-        sanitizeConfig(
-          member?.coconut ?? {
-            baseImage: baseOptions[0],
-            accessories: ["nameLabel"],
-            label: member?.nickname ?? "My Coco",
-            sunglassesImage: "",
-            skirtImage: "",
-            hairImage: "",
-            accessoryImage: "",
-            accessoryTopImage: "",
-            accessoryBottomImage: "",
-            colors: {},
-          },
-        ),
-      );
     }
 
     void loadCurrentMember();
@@ -225,7 +208,34 @@ export function CoconutCustomizer({
     return () => {
       cancelled = true;
     };
-  }, [supabase, tripDatabaseId, members, initialMember]);
+  }, [supabase, tripDatabaseId]);
+
+  useEffect(() => {
+    const member = members.find((item) => item.id === currentTripMemberId) ?? initialMember;
+    const hydrateKey = member.id;
+
+    if (hydratedMemberIdRef.current === hydrateKey) {
+      return;
+    }
+
+    hydratedMemberIdRef.current = hydrateKey;
+    setConfig(
+      sanitizeConfig(
+        member?.coconut ?? {
+          baseImage: baseOptions[0],
+          accessories: ["nameLabel"],
+          label: member?.nickname ?? "My Coco",
+          sunglassesImage: "",
+          skirtImage: "",
+          hairImage: "",
+          accessoryImage: "",
+          accessoryTopImage: "",
+          accessoryBottomImage: "",
+          colors: {},
+        },
+      ),
+    );
+  }, [currentTripMemberId, members, initialMember]);
 
   function cycleBase(direction: -1 | 1) {
     setConfig((current) => {
