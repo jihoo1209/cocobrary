@@ -21,6 +21,10 @@ function isUuidLike(value: string | null | undefined) {
   );
 }
 
+function getAnonymousProfileKey(tripSlug: string) {
+  return `cocotree:${tripSlug}:anonymous-profile`;
+}
+
 export function TripAccessGate({
   tripSlug,
   initialTripDatabaseId,
@@ -37,6 +41,7 @@ export function TripAccessGate({
   );
   const [sessionUserId, setSessionUserId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const autoJoinAttemptedRef = useRef(false);
 
   useEffect(() => {
     if (!supabase) {
@@ -58,6 +63,24 @@ export function TripAccessGate({
       }
 
       setSessionUserId(session?.user?.id ?? null);
+
+      if (session?.user?.id) {
+        try {
+          const savedProfile = window.localStorage.getItem(getAnonymousProfileKey(tripSlug));
+          const parsedProfile = savedProfile ? JSON.parse(savedProfile) : null;
+
+          if (
+            parsedProfile &&
+            typeof parsedProfile === "object" &&
+            parsedProfile.userId === session.user.id &&
+            typeof parsedProfile.nickname === "string"
+          ) {
+            setNickname((current) => current || parsedProfile.nickname || "");
+          }
+        } catch {
+          // Ignore malformed local profile cache.
+        }
+      }
     }
 
     void loadSession();
@@ -66,6 +89,24 @@ export function TripAccessGate({
       data: { subscription },
     } = client.auth.onAuthStateChange((_event, session) => {
       setSessionUserId(session?.user?.id ?? null);
+
+      if (session?.user?.id) {
+        try {
+          const savedProfile = window.localStorage.getItem(getAnonymousProfileKey(tripSlug));
+          const parsedProfile = savedProfile ? JSON.parse(savedProfile) : null;
+
+          if (
+            parsedProfile &&
+            typeof parsedProfile === "object" &&
+            parsedProfile.userId === session.user.id &&
+            typeof parsedProfile.nickname === "string"
+          ) {
+            setNickname((current) => current || parsedProfile.nickname || "");
+          }
+        } catch {
+          // Ignore malformed local profile cache.
+        }
+      }
     });
 
     return () => {
@@ -153,6 +194,36 @@ export function TripAccessGate({
         return;
       }
 
+      try {
+        const savedProfile = window.localStorage.getItem(getAnonymousProfileKey(tripSlug));
+        const parsedProfile = savedProfile ? JSON.parse(savedProfile) : null;
+
+        if (
+          !autoJoinAttemptedRef.current &&
+          parsedProfile &&
+          typeof parsedProfile === "object" &&
+          parsedProfile.userId === sessionUserId &&
+          typeof parsedProfile.nickname === "string" &&
+          parsedProfile.nickname.trim()
+        ) {
+          autoJoinAttemptedRef.current = true;
+
+          const { error } = await client.rpc("join_trip_by_slug", {
+            target_trip_slug: tripSlug,
+            desired_nickname: parsedProfile.nickname.trim().slice(0, 8),
+          });
+
+          if (!error && !isCancelled) {
+            setNickname(parsedProfile.nickname.trim().slice(0, 8));
+            setGateState("ready");
+            router.refresh();
+            return;
+          }
+        }
+      } catch {
+        // Ignore malformed local profile cache.
+      }
+
       setGateState("needs-join");
     }
 
@@ -206,6 +277,18 @@ export function TripAccessGate({
       setIsSubmitting(false);
       setStatus("We couldn't join this CocoTree yet. Please make sure the new trip member policy is applied in Supabase.");
       return;
+    }
+
+    try {
+      window.localStorage.setItem(
+        getAnonymousProfileKey(tripSlug),
+        JSON.stringify({
+          userId: sessionUserId,
+          nickname: trimmedNickname,
+        }),
+      );
+    } catch {
+      // Ignore storage failures; server join already succeeded.
     }
 
     setGateState("ready");
