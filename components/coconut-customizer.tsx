@@ -316,7 +316,10 @@ export function CoconutCustomizer({
   }, [supabase, tripDatabaseId]);
 
   useEffect(() => {
-    const member = members.find((item) => item.id === currentTripMemberId) ?? initialMember;
+    const member =
+      hydratedMember ??
+      members.find((item) => item.id === currentTripMemberId) ??
+      initialMember;
     const hydrateKey = member.id;
 
     if (hydratedMemberIdRef.current === hydrateKey) {
@@ -340,7 +343,7 @@ export function CoconutCustomizer({
         },
       ),
     );
-  }, [currentTripMemberId, members, initialMember]);
+  }, [currentTripMemberId, hydratedMember, members, initialMember]);
 
   function cycleBase(direction: -1 | 1) {
     setConfig((current) => {
@@ -521,10 +524,62 @@ export function CoconutCustomizer({
   }
 
   async function handleSave() {
+    let ensuredTripMemberId = currentTripMemberId;
+
+    if (supabase && tripDatabaseId && !ensuredTripMemberId) {
+      const { data: authData } = await supabase.auth.getUser();
+      const userId = authData.user?.id;
+
+      if (userId) {
+        const { data: existingMember } = await supabase
+          .from("trip_members")
+          .select("id")
+          .eq("trip_id", tripDatabaseId)
+          .eq("user_id", userId)
+          .maybeSingle();
+
+        ensuredTripMemberId = existingMember?.id ?? null;
+
+        if (!ensuredTripMemberId) {
+          try {
+            const savedProfile = window.localStorage.getItem(getAnonymousProfileKey(tripId));
+            const parsedProfile = savedProfile ? JSON.parse(savedProfile) : null;
+            const desiredNickname =
+              parsedProfile &&
+              typeof parsedProfile === "object" &&
+              parsedProfile.userId === userId &&
+              typeof parsedProfile.nickname === "string"
+                ? parsedProfile.nickname.trim().slice(0, 8)
+                : (config.label?.trim().slice(0, 8) ?? "");
+
+            if (desiredNickname) {
+              const { error: joinError } = await supabase.rpc("join_trip_by_slug", {
+                target_trip_slug: tripId,
+                desired_nickname: desiredNickname,
+              });
+
+              if (!joinError) {
+                const { data: joinedMember } = await supabase
+                  .from("trip_members")
+                  .select("id")
+                  .eq("trip_id", tripDatabaseId)
+                  .eq("user_id", userId)
+                  .maybeSingle();
+
+                ensuredTripMemberId = joinedMember?.id ?? null;
+              }
+            }
+          } catch {
+            // Ignore local profile parsing issues and fall through to the shared account error.
+          }
+        }
+      }
+    }
+
     const nextConfig = {
       ...config,
       persisted: true,
-      albumId: currentTripMemberId ?? selectedMember?.id ?? "",
+      albumId: ensuredTripMemberId ?? selectedMember?.id ?? "",
       label: config.label?.trim() || selectedMember?.nickname || "My Coco",
       sunglassesImage: config.sunglassesImage ?? "",
       skirtImage: config.skirtImage ?? "",
@@ -534,20 +589,24 @@ export function CoconutCustomizer({
       accessoryBottomImage: config.accessoryBottomImage ?? "",
     };
 
-    if (!supabase || !currentTripMemberId) {
+    if (!supabase || !ensuredTripMemberId) {
       setStatus("We couldn't find your shared coco account yet. Please reopen the tree and try again.");
       return;
     }
 
+    if (ensuredTripMemberId !== currentTripMemberId) {
+      setCurrentTripMemberId(ensuredTripMemberId);
+    }
+
     const { error } = await supabase.from("coconuts").upsert(
       {
-        trip_member_id: currentTripMemberId,
+        trip_member_id: ensuredTripMemberId,
         base_image: nextConfig.baseImage,
         accessories: nextConfig.accessories,
         label: nextConfig.label,
         colors: nextConfig.colors ?? {},
         metadata: {
-          albumId: currentTripMemberId,
+          albumId: ensuredTripMemberId,
           sunglassesImage: nextConfig.sunglassesImage ?? "",
           skirtImage: nextConfig.skirtImage ?? "",
           hairImage: nextConfig.hairImage ?? "",
@@ -565,7 +624,7 @@ export function CoconutCustomizer({
     );
 
     if (!error) {
-      sessionStorage.setItem(`cocotree:last-planted-member:${tripId}`, currentTripMemberId);
+      sessionStorage.setItem(`cocotree:last-planted-member:${tripId}`, ensuredTripMemberId);
       window.setTimeout(() => {
         router.push(`/trip/${tripId}`);
       }, 450);
