@@ -2,16 +2,23 @@ import { demoTrip } from "@/lib/mock-data";
 import { Trip, TripMember } from "@/lib/types";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
-function normalizeTrip(tripId: string): Trip {
+function normalizeTrip(tripId: string, databaseId?: string | null): Trip {
   if (tripId === demoTrip.id) {
-    return demoTrip;
+    return {
+      ...demoTrip,
+      databaseId: databaseId ?? demoTrip.databaseId,
+      members: [],
+      photos: [],
+    };
   }
 
   return {
     ...demoTrip,
     id: tripId,
-    databaseId: tripId,
+    databaseId: databaseId ?? undefined,
     name: "CocoTree Vacation",
+    members: [],
+    photos: [],
   };
 }
 
@@ -29,7 +36,14 @@ export async function getTripData(tripId: string): Promise<Trip> {
     .maybeSingle();
 
   if (!tripRow) {
-    return normalizeTrip(tripId);
+    const { data: resolvedTripId } = await supabase.rpc("resolve_trip_id_by_slug", {
+      target_trip_slug: tripId,
+    });
+
+    return normalizeTrip(
+      tripId,
+      typeof resolvedTripId === "string" ? resolvedTripId : undefined,
+    );
   }
 
   const [{ data: memberRows }, { data: photoRows }] = await Promise.all([
@@ -82,7 +96,7 @@ export async function getTripData(tripId: string): Promise<Trip> {
           colors: coconutRow?.colors ?? {},
         },
       };
-    }) ?? demoTrip.members;
+    }) ?? [];
 
   const signedPaths = photoRows?.map((row) => row.storage_path).filter(Boolean) ?? [];
   const signedUrlMap = new Map<string, string>();
@@ -125,7 +139,7 @@ export async function getTripData(tripId: string): Promise<Trip> {
           imageUrl: signedUrlMap.get(row.storage_path) ?? demoTrip.photos[0].imageUrl,
           targets: photoTargets?.map((target) => ({ memberId: target.trip_member_id })) ?? [],
         };
-      }) ?? demoTrip.photos,
+      }) ?? [],
   };
 }
 

@@ -211,7 +211,7 @@ begin
 end;
 $$;
 
-grant execute on function public.resolve_trip_id_by_slug(text) to authenticated;
+grant execute on function public.resolve_trip_id_by_slug(text) to anon, authenticated;
 grant execute on function public.join_trip_by_slug(text, text) to authenticated;
 
 create or replace function public.delete_own_album(target_trip_id uuid, target_album_member_id uuid)
