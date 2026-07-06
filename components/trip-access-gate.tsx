@@ -39,6 +39,9 @@ export function TripAccessGate({
   const [resolvedTripDatabaseId, setResolvedTripDatabaseId] = useState<string | null>(
     isUuidLike(initialTripDatabaseId) ? initialTripDatabaseId ?? null : null,
   );
+  const [hasResolvedTripLookup, setHasResolvedTripLookup] = useState(
+    Boolean(isUuidLike(initialTripDatabaseId)),
+  );
   const [sessionUserId, setSessionUserId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const autoJoinAttemptedRef = useRef(false);
@@ -117,12 +120,14 @@ export function TripAccessGate({
 
   useEffect(() => {
     if (!supabase) {
+      setHasResolvedTripLookup(true);
       return;
     }
 
     const client = supabase;
 
     let isCancelled = false;
+    setHasResolvedTripLookup(Boolean(isUuidLike(initialTripDatabaseId)));
 
     async function resolveTrip() {
       const { data: tripIdFromRpc } = await client.rpc("resolve_trip_id_by_slug", {
@@ -137,6 +142,7 @@ export function TripAccessGate({
               ? initialTripDatabaseId ?? null
               : null,
         );
+        setHasResolvedTripLookup(true);
       }
     }
 
@@ -150,6 +156,11 @@ export function TripAccessGate({
   useEffect(() => {
     if (!supabase) {
       setGateState("ready");
+      return;
+    }
+
+    if (!hasResolvedTripLookup) {
+      setGateState("loading");
       return;
     }
 
@@ -232,7 +243,15 @@ export function TripAccessGate({
     return () => {
       isCancelled = true;
     };
-  }, [supabase, resolvedTripDatabaseId, sessionUserId, initialTripDatabaseId, router]);
+  }, [
+    supabase,
+    resolvedTripDatabaseId,
+    sessionUserId,
+    initialTripDatabaseId,
+    hasResolvedTripLookup,
+    router,
+    tripSlug,
+  ]);
 
   async function handleStartAnonymous() {
     if (!supabase) {
