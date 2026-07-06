@@ -45,6 +45,7 @@ export function TripAccessGate({
   const [sessionUserId, setSessionUserId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const autoJoinAttemptedRef = useRef(false);
+  const autoSessionAttemptedRef = useRef(false);
 
   useEffect(() => {
     if (!supabase) {
@@ -152,6 +153,36 @@ export function TripAccessGate({
       isCancelled = true;
     };
   }, [supabase, tripSlug, initialTripDatabaseId]);
+
+  useEffect(() => {
+    if (!supabase || !hasResolvedTripLookup || sessionUserId || isSubmitting) {
+      return;
+    }
+
+    if (resolvedTripDatabaseId === null && hasResolvedTripLookup) {
+      return;
+    }
+
+    if (autoSessionAttemptedRef.current) {
+      return;
+    }
+
+    autoSessionAttemptedRef.current = true;
+    setIsSubmitting(true);
+    setStatus("");
+
+    void supabase.auth.signInAnonymously().then(({ error }) => {
+      setIsSubmitting(false);
+
+      if (error) {
+        setStatus(`We couldn't start your coco session yet: ${error.message}`);
+        autoSessionAttemptedRef.current = false;
+        return;
+      }
+
+      setStatus("");
+    });
+  }, [supabase, hasResolvedTripLookup, resolvedTripDatabaseId, sessionUserId, isSubmitting]);
 
   useEffect(() => {
     if (!supabase) {
@@ -270,6 +301,10 @@ export function TripAccessGate({
         ? `We couldn't start your coco session yet: ${error.message}`
         : "Your coco session is ready. One more nickname step and you'll be in.",
     );
+
+    if (!error) {
+      autoSessionAttemptedRef.current = true;
+    }
   }
 
   async function handleJoinTrip() {
@@ -348,7 +383,7 @@ export function TripAccessGate({
                 Join This CocoTree
               </p>
               <p className="text-sm leading-6 text-[rgba(79,58,41,0.72)]">
-                Start with an anonymous coco session, then we&apos;ll connect you to the shared album with your friends.
+                We&apos;re trying to start your anonymous coco session automatically. If it takes too long, you can start it yourself below.
               </p>
             </div>
 
