@@ -118,6 +118,65 @@ type CoconutCustomizerProps = {
   members: TripMember[];
 };
 
+function buildMemberFromRow(
+  row: {
+    id: string;
+    nickname: string;
+    profile_note?: string | null;
+    coconut_x?: number | null;
+    coconut_y?: number | null;
+    coconuts?:
+      | {
+          base_image?: string | null;
+          accessories?: CoconutConfig["accessories"] | null;
+          label?: string | null;
+          colors?: CoconutConfig["colors"] | null;
+          metadata?: Record<string, unknown> | null;
+        }
+      | {
+          base_image?: string | null;
+          accessories?: CoconutConfig["accessories"] | null;
+          label?: string | null;
+          colors?: CoconutConfig["colors"] | null;
+          metadata?: Record<string, unknown> | null;
+        }[]
+      | null;
+  },
+): TripMember {
+  const coconutRow = Array.isArray(row.coconuts) ? row.coconuts[0] : row.coconuts;
+  const metadata =
+    coconutRow?.metadata && typeof coconutRow.metadata === "object"
+      ? (coconutRow.metadata as Record<string, unknown>)
+      : {};
+
+  return {
+    id: row.id,
+    nickname: row.nickname,
+    bio: row.profile_note ?? undefined,
+    position: {
+      x: row.coconut_x ?? 50,
+      y: row.coconut_y ?? 39,
+    },
+    coconut: {
+      persisted: Boolean(coconutRow),
+      albumId: row.id,
+      baseImage: coconutRow?.base_image ?? baseOptions[0],
+      accessories: coconutRow?.accessories ?? ["nameLabel"],
+      label: coconutRow?.label ?? row.nickname,
+      sunglassesImage:
+        typeof metadata.sunglassesImage === "string" ? metadata.sunglassesImage : "",
+      skirtImage: typeof metadata.skirtImage === "string" ? metadata.skirtImage : "",
+      hairImage: typeof metadata.hairImage === "string" ? metadata.hairImage : "",
+      accessoryImage: "",
+      accessoryTopImage:
+        typeof metadata.accessoryTopImage === "string" ? metadata.accessoryTopImage : "",
+      accessoryBottomImage:
+        typeof metadata.accessoryBottomImage === "string" ? metadata.accessoryBottomImage : "",
+      colors: coconutRow?.colors ?? {},
+    },
+  };
+}
+
 export function CoconutCustomizer({
   tripId,
   tripDatabaseId,
@@ -150,8 +209,11 @@ export function CoconutCustomizer({
   };
   const initialMember = members[0] ?? fallbackMember;
   const [currentTripMemberId, setCurrentTripMemberId] = useState<string | null>(null);
+  const [hydratedMember, setHydratedMember] = useState<TripMember | null>(null);
   const selectedMember =
-    members.find((member) => member.id === currentTripMemberId) ?? initialMember;
+    hydratedMember ??
+    members.find((member) => member.id === currentTripMemberId) ??
+    initialMember;
   const initialConfig = sanitizeConfig(
     selectedMember?.coconut ?? {
       baseImage: baseOptions[0],
@@ -190,7 +252,9 @@ export function CoconutCustomizer({
 
       const { data: tripMember } = await client
         .from("trip_members")
-        .select("id")
+        .select(
+          "id, nickname, profile_note, coconut_x, coconut_y, coconuts(base_image, accessories, label, colors, metadata)",
+        )
         .eq("trip_id", tripDatabaseId)
         .eq("user_id", userId)
         .maybeSingle();
@@ -201,6 +265,7 @@ export function CoconutCustomizer({
 
       const nextMemberId = tripMember?.id ?? null;
       setCurrentTripMemberId(nextMemberId);
+      setHydratedMember(tripMember ? buildMemberFromRow(tripMember) : null);
     }
 
     void loadCurrentMember();

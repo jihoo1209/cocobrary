@@ -24,6 +24,65 @@ type CoconutTreeStageProps = {
   trip: Trip;
 };
 
+function buildMemberFromRow(
+  row: {
+    id: string;
+    nickname: string;
+    profile_note?: string | null;
+    coconut_x?: number | null;
+    coconut_y?: number | null;
+    coconuts?:
+      | {
+          base_image?: string | null;
+          accessories?: TripMember["coconut"]["accessories"] | null;
+          label?: string | null;
+          colors?: TripMember["coconut"]["colors"] | null;
+          metadata?: Record<string, unknown> | null;
+        }
+      | {
+          base_image?: string | null;
+          accessories?: TripMember["coconut"]["accessories"] | null;
+          label?: string | null;
+          colors?: TripMember["coconut"]["colors"] | null;
+          metadata?: Record<string, unknown> | null;
+        }[]
+      | null;
+  },
+): TripMember {
+  const coconutRow = Array.isArray(row.coconuts) ? row.coconuts[0] : row.coconuts;
+  const metadata =
+    coconutRow?.metadata && typeof coconutRow.metadata === "object"
+      ? (coconutRow.metadata as Record<string, unknown>)
+      : {};
+
+  return {
+    id: row.id,
+    nickname: row.nickname,
+    bio: row.profile_note ?? undefined,
+    position: {
+      x: row.coconut_x ?? 50,
+      y: row.coconut_y ?? 40,
+    },
+    coconut: {
+      persisted: Boolean(coconutRow),
+      albumId: row.id,
+      baseImage: coconutRow?.base_image ?? "/assets/coconut-01.png",
+      accessories: coconutRow?.accessories ?? [],
+      label: coconutRow?.label ?? row.nickname,
+      sunglassesImage:
+        typeof metadata.sunglassesImage === "string" ? metadata.sunglassesImage : "",
+      skirtImage: typeof metadata.skirtImage === "string" ? metadata.skirtImage : "",
+      hairImage: typeof metadata.hairImage === "string" ? metadata.hairImage : "",
+      accessoryImage: "",
+      accessoryTopImage:
+        typeof metadata.accessoryTopImage === "string" ? metadata.accessoryTopImage : "",
+      accessoryBottomImage:
+        typeof metadata.accessoryBottomImage === "string" ? metadata.accessoryBottomImage : "",
+      colors: coconutRow?.colors ?? {},
+    },
+  };
+}
+
 function getBadgeIndex(members: TripMember[], memberId: string) {
   return members.findIndex((member) => member.id === memberId);
 }
@@ -38,14 +97,15 @@ export function CoconutTreeStage({ trip }: CoconutTreeStageProps) {
     time: 0,
   });
   const [currentTripMemberId, setCurrentTripMemberId] = useState<string | null>(null);
+  const [sharedMembers, setSharedMembers] = useState<TripMember[]>(trip.members);
   const [justPlantedIndex, setJustPlantedIndex] = useState<number | null>(null);
   const [deleteModeMemberId, setDeleteModeMemberId] = useState<string | null>(null);
   const [confirmDeleteMemberId, setConfirmDeleteMemberId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
   const visibleMembers = useMemo(
-    () => trip.members.filter((member) => member.coconut.persisted).slice(0, 9),
-    [trip.members],
+    () => sharedMembers.filter((member) => member.coconut.persisted).slice(0, 9),
+    [sharedMembers],
   );
 
   useEffect(() => {
@@ -86,6 +146,37 @@ export function CoconutTreeStage({ trip }: CoconutTreeStageProps) {
       cancelled = true;
     };
   }, [supabase, trip.databaseId]);
+
+  useEffect(() => {
+    if (!supabase || !trip.databaseId || !currentTripMemberId) {
+      return;
+    }
+
+    let cancelled = false;
+    const client = supabase;
+
+    async function loadSharedMembers() {
+      const { data: rows } = await client
+        .from("trip_members")
+        .select(
+          "id, nickname, profile_note, coconut_x, coconut_y, created_at, coconuts(base_image, accessories, label, colors, metadata)",
+        )
+        .eq("trip_id", trip.databaseId)
+        .order("created_at", { ascending: true });
+
+      if (cancelled) {
+        return;
+      }
+
+      setSharedMembers((rows ?? []).map(buildMemberFromRow));
+    }
+
+    void loadSharedMembers();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase, trip.databaseId, currentTripMemberId]);
 
   useEffect(() => {
     const plantedMemberId = sessionStorage.getItem(

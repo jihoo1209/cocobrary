@@ -27,12 +27,74 @@ function dedupePhotosById(items: AlbumPhoto[]) {
   });
 }
 
+function buildMemberFromRow(
+  row: {
+    id: string;
+    nickname: string;
+    profile_note?: string | null;
+    coconut_x?: number | null;
+    coconut_y?: number | null;
+    coconuts?:
+      | {
+          base_image?: string | null;
+          accessories?: CoconutConfig["accessories"] | null;
+          label?: string | null;
+          colors?: CoconutConfig["colors"] | null;
+          metadata?: Record<string, unknown> | null;
+        }
+      | {
+          base_image?: string | null;
+          accessories?: CoconutConfig["accessories"] | null;
+          label?: string | null;
+          colors?: CoconutConfig["colors"] | null;
+          metadata?: Record<string, unknown> | null;
+        }[]
+      | null;
+  },
+): TripMember {
+  const coconutRow = Array.isArray(row.coconuts) ? row.coconuts[0] : row.coconuts;
+  const metadata =
+    coconutRow?.metadata && typeof coconutRow.metadata === "object"
+      ? (coconutRow.metadata as Record<string, unknown>)
+      : {};
+
+  return {
+    id: row.id,
+    nickname: row.nickname,
+    bio: row.profile_note ?? undefined,
+    position: {
+      x: row.coconut_x ?? 50,
+      y: row.coconut_y ?? 40,
+    },
+    coconut: {
+      persisted: Boolean(coconutRow),
+      albumId: row.id,
+      baseImage: coconutRow?.base_image ?? "/assets/coconut-01.png",
+      accessories: coconutRow?.accessories ?? [],
+      label: coconutRow?.label ?? row.nickname,
+      sunglassesImage:
+        typeof metadata.sunglassesImage === "string" ? metadata.sunglassesImage : "",
+      skirtImage: typeof metadata.skirtImage === "string" ? metadata.skirtImage : "",
+      hairImage: typeof metadata.hairImage === "string" ? metadata.hairImage : "",
+      accessoryImage: "",
+      accessoryTopImage:
+        typeof metadata.accessoryTopImage === "string" ? metadata.accessoryTopImage : "",
+      accessoryBottomImage:
+        typeof metadata.accessoryBottomImage === "string" ? metadata.accessoryBottomImage : "",
+      colors: coconutRow?.colors ?? {},
+    },
+  };
+}
+
 export default function AlbumPageClient({
   trip,
   memberId,
 }: AlbumPageClientProps) {
   const [photos, setPhotos] = useState<AlbumPhoto[]>(trip.photos);
   const [customMember, setCustomMember] = useState<TripMember | null>(null);
+  const [resolvedMember, setResolvedMember] = useState<TripMember | null>(
+    trip.members.find((item) => item.id === memberId) ?? null,
+  );
   const [isSelecting, setIsSelecting] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [currentTripMemberId, setCurrentTripMemberId] = useState<string | null>(null);
@@ -105,8 +167,8 @@ export default function AlbumPageClient({
   }, [memberId, trip.id, trip.members]);
 
   const member = useMemo(
-    () => trip.members.find((item) => item.id === memberId) ?? customMember ?? trip.members[0],
-    [trip.members, memberId, customMember],
+    () => resolvedMember ?? customMember ?? trip.members[0],
+    [trip.members, resolvedMember, customMember],
   );
   useEffect(() => {
     const supabase = createSupabaseBrowserClient();
@@ -148,6 +210,38 @@ export default function AlbumPageClient({
       cancelled = true;
     };
   }, [trip.databaseId]);
+
+  useEffect(() => {
+    const supabase = createSupabaseBrowserClient();
+
+    if (!supabase || !trip.databaseId) {
+      return;
+    }
+
+    let cancelled = false;
+    const client = supabase;
+
+    async function loadResolvedMember() {
+      const { data: row } = await client
+        .from("trip_members")
+        .select(
+          "id, nickname, profile_note, coconut_x, coconut_y, coconuts(base_image, accessories, label, colors, metadata)",
+        )
+        .eq("trip_id", trip.databaseId)
+        .eq("id", memberId)
+        .maybeSingle();
+
+      if (!cancelled && row) {
+        setResolvedMember(buildMemberFromRow(row));
+      }
+    }
+
+    void loadResolvedMember();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [trip.databaseId, memberId]);
 
   async function deleteServerPhotos(photoIds: string[]) {
     const supabase = createSupabaseBrowserClient();
