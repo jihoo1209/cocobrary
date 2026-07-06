@@ -118,6 +118,10 @@ type CoconutCustomizerProps = {
   members: TripMember[];
 };
 
+function getAnonymousProfileKey(tripSlug: string) {
+  return `cocotree:${tripSlug}:anonymous-profile`;
+}
+
 function buildMemberFromRow(
   row: {
     id: string;
@@ -250,7 +254,7 @@ export function CoconutCustomizer({
         return;
       }
 
-      const { data: tripMember } = await client
+      let { data: tripMember } = await client
         .from("trip_members")
         .select(
           "id, nickname, profile_note, coconut_x, coconut_y, coconuts(base_image, accessories, label, colors, metadata)",
@@ -258,6 +262,42 @@ export function CoconutCustomizer({
         .eq("trip_id", tripDatabaseId)
         .eq("user_id", userId)
         .maybeSingle();
+
+      if (!tripMember) {
+        try {
+          const savedProfile = window.localStorage.getItem(getAnonymousProfileKey(tripId));
+          const parsedProfile = savedProfile ? JSON.parse(savedProfile) : null;
+          const desiredNickname =
+            parsedProfile &&
+            typeof parsedProfile === "object" &&
+            parsedProfile.userId === userId &&
+            typeof parsedProfile.nickname === "string"
+              ? parsedProfile.nickname.trim().slice(0, 8)
+              : "";
+
+          if (desiredNickname) {
+            const { error: joinError } = await client.rpc("join_trip_by_slug", {
+              target_trip_slug: tripId,
+              desired_nickname: desiredNickname,
+            });
+
+            if (!joinError) {
+              const { data: joinedMember } = await client
+                .from("trip_members")
+                .select(
+                  "id, nickname, profile_note, coconut_x, coconut_y, coconuts(base_image, accessories, label, colors, metadata)",
+                )
+                .eq("trip_id", tripDatabaseId)
+                .eq("user_id", userId)
+                .maybeSingle();
+
+              tripMember = joinedMember ?? null;
+            }
+          }
+        } catch {
+          // Ignore malformed local profile cache and leave fallback handling below.
+        }
+      }
 
       if (cancelled) {
         return;
