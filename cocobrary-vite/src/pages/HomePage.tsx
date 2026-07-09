@@ -44,10 +44,10 @@ type HomePageProps = {
 };
 
 const baseOptions = [
-  "/assets/coconut-01.png",
-  "/assets/coconut-02.png",
-  "/assets/coconut-03.png",
-  "/assets/coconut-04.png",
+  "/assets/coconut-01.webp",
+  "/assets/coconut-02.webp",
+  "/assets/coconut-03.webp",
+  "/assets/coconut-04.webp",
 ];
 
 const sunglassesOptions = [
@@ -336,9 +336,12 @@ function LoadingScreen() {
   return (
     <main className="flex min-h-[100svh] items-center justify-center bg-white px-6">
       <img
-        src="/assets/loading-coco.png"
+        src="/assets/loading-coco.webp"
         alt="CocoTree loading coconut"
         className="h-auto w-full max-w-[330px] object-contain"
+        loading="eager"
+        decoding="async"
+        fetchPriority="high"
         draggable={false}
       />
     </main>
@@ -506,10 +509,11 @@ function TreeScreen({
       }}
     >
       <img
-        src="/assets/coconut-tree.png"
+        src="/assets/coconut-tree.webp"
         alt="CocoTree coconut tree"
         className="absolute inset-0 h-full w-full object-cover"
         style={{ objectPosition: "50% 48%" }}
+        decoding="async"
         draggable={false}
       />
 
@@ -1481,7 +1485,14 @@ function CustomizerScreen({
                 config.sunglassesImage === image ? "customizer-option-button--active" : ""
               }`}
             >
-              <img src={image} alt="" className="h-8 w-11 object-contain" draggable={false} />
+              <img
+                src={image}
+                alt=""
+                className="h-8 w-11 object-contain"
+                loading="lazy"
+                decoding="async"
+                draggable={false}
+              />
             </button>
           ))}
         </div>
@@ -1501,7 +1512,14 @@ function CustomizerScreen({
                 config.skirtImage === image ? "customizer-option-button--active" : ""
               }`}
             >
-              <img src={image} alt="" className="h-11 w-14 object-contain" draggable={false} />
+              <img
+                src={image}
+                alt=""
+                className="h-11 w-14 object-contain"
+                loading="lazy"
+                decoding="async"
+                draggable={false}
+              />
             </button>
           ))}
         </div>
@@ -1522,7 +1540,14 @@ function CustomizerScreen({
                   config.accessoryTopImage === image ? "customizer-option-button--active" : ""
                 }`}
               >
-                <img src={image} alt="" className="h-10 w-10 object-contain" draggable={false} />
+                <img
+                  src={image}
+                  alt=""
+                  className="h-10 w-10 object-contain"
+                  loading="lazy"
+                  decoding="async"
+                  draggable={false}
+                />
               </button>
             ))}
           </div>
@@ -1537,7 +1562,14 @@ function CustomizerScreen({
                   config.accessoryBottomImage === image ? "customizer-option-button--active" : ""
                 }`}
               >
-                <img src={image} alt="" className="h-10 w-10 object-contain" draggable={false} />
+                <img
+                  src={image}
+                  alt=""
+                  className="h-10 w-10 object-contain"
+                  loading="lazy"
+                  decoding="async"
+                  draggable={false}
+                />
               </button>
             ))}
           </div>
@@ -1558,7 +1590,14 @@ function CustomizerScreen({
                 config.hairImage === image ? "customizer-option-button--active" : ""
               }`}
             >
-              <img src={image} alt="" className="h-12 w-12 object-contain" draggable={false} />
+              <img
+                src={image}
+                alt=""
+                className="h-12 w-12 object-contain"
+                loading="lazy"
+                decoding="async"
+                draggable={false}
+              />
             </button>
           ))}
         </div>
@@ -1577,7 +1616,11 @@ function CustomizerScreen({
               config.baseImage === baseImage ? "customizer-option-button--active" : ""
             }`}
           >
-            <CoconutAvatar config={{ ...config, baseImage, accessories: [] }} size={52} />
+            <CoconutAvatar
+              config={{ ...config, baseImage, accessories: [] }}
+              size={52}
+              imageLoading="lazy"
+            />
           </button>
         ))}
       </div>

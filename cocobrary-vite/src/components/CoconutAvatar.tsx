@@ -5,12 +5,18 @@ type CoconutAvatarProps = {
   config: CoconutConfig;
   size?: number;
   className?: string;
+  imageLoading?: "eager" | "lazy";
 };
+
+function optimizeCoconutBaseImage(imagePath: string) {
+  return imagePath.replace(/\/assets\/(coconut-0[1-4])\.png$/, "/assets/$1.webp");
+}
 
 export function CoconutAvatar({
   config,
   size = 116,
   className,
+  imageLoading,
 }: CoconutAvatarProps) {
   const labelPalette = ["#fff7d6", "#ffd8e8", "#d7f7eb", "#eadcff", "#e7dcff"];
   const hasAccessory = (name: string) => config.accessories.includes(name as never);
@@ -78,6 +84,7 @@ export function CoconutAvatar({
     "/assets/skirt-05.png": { left: "10%", top: "63%", width: "89%", scaleY: 0.84 },
   };
   const selectedSkirtStyle = config.skirtImage ? skirtStyles[config.skirtImage] : null;
+  const baseImageSrc = optimizeCoconutBaseImage(config.baseImage);
 
   return (
     <div
@@ -85,9 +92,11 @@ export function CoconutAvatar({
       style={{ width: size, height: size }}
     >
       <img
-        src={config.baseImage}
+        src={baseImageSrc}
         alt={config.label ?? "Coconut avatar"}
         className="h-full w-full object-contain drop-shadow-[0_10px_14px_rgba(78,50,29,0.28)]"
+        loading={imageLoading}
+        decoding="async"
         draggable={false}
       />
 
